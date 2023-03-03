@@ -1,11 +1,13 @@
 import numpy as np
 import os, sys
-import tensorflow as tf
+# import tensorflow as tf
+import tensorflow._api.v2.compat.v1 as tf
+tf.disable_v2_behavior()
 import argparse
 from functools import reduce
 import math
 import time
-
+import torchmetrics
 from keras.models import Model
 from keras import regularizers, optimizers
 from keras.layers import Input, Dense, concatenate
@@ -13,6 +15,9 @@ from keras import backend as K
 from keras.models import load_model
 
 from dataset import read_data_sets, embedding_lookup
+
+
+
 
 parser = argparse.ArgumentParser("hyper-network embedding", fromfile_prefix_chars='@')
 parser.add_argument('--data_path', type=str, help='Directory to load data.')
@@ -35,11 +40,14 @@ class hypergraph(object):
         self.build_model()
 
     def sparse_autoencoder_error(self, y_true, y_pred):
+        # print("y_true:", y_true.shape)
+        print("loss:", K.mean(K.square(K.sign(y_true)*(y_true-y_pred)), axis=-1))
         return K.mean(K.square(K.sign(y_true)*(y_true-y_pred)), axis=-1)
 
 
     def build_model(self):
         ### TO DO: tensorflow supports sparse_placeholder and sparse_matmul from version 1.4
+        # 三种类型的节点，且每条超边为3个节点
         self.inputs = [Input(shape=(self.options.dim_feature[i], ), name='input_{}'.format(i), dtype='float') for i in range(3)]
 
         ### auto-encoder
@@ -48,16 +56,18 @@ class hypergraph(object):
                         activity_regularizer = regularizers.l2(0.0))(self.encodeds[i]) for i in range(3)]
 
         self.merged = concatenate(self.encodeds, axis=1)
+        # tanh:non-linear activation
         self.hidden_layer = Dense(self.options.hidden_size, activation='tanh', name='full_connected_layer')(self.merged)
         self.ouput_layer = Dense(1, activation='sigmoid', name='classify_layer')(self.hidden_layer)
-
+        print("self.decodeds+[self.ouput_layer]:",self.decodeds+[self.ouput_layer])
         self.model = Model(inputs=self.inputs, outputs=self.decodeds+[self.ouput_layer])
 
         self.model.compile(optimizer=optimizers.RMSprop(lr=self.options.learning_rate),
                 loss=[self.sparse_autoencoder_error]*3+['binary_crossentropy'],
                               loss_weights=[self.options.alpha]*3+[1.0],
                               metrics=dict([('decode_{}'.format(i), 'mse') for i in range(3)]+[('classify_layer', 'accuracy')]))
-
+        # m = model()
+        # print("h:", h.shape)
         self.model.summary()
 
     def train(self, dataset):
@@ -76,7 +86,7 @@ class hypergraph(object):
         batch_e = embedding_lookup(embeddings, x)
         return (dict([('input_{}'.format(i), batch_e[i]) for i in range(3)]),
                 dict([('decode_{}'.format(i), batch_e[i]) for i in range(3)]+[('classify_layer', y)]))
-        return res
+        # return res
 
     def get_embeddings(self, dataset):
         shift = np.append([0], np.cumsum(dataset.train.nums_type))
@@ -142,16 +152,29 @@ if __name__ == '__main__':
         args = load_config(args.options)
     if args.seed is not None:
         np.random.seed(args.seed)
+    #    读数据集
     dataset = read_data_sets(args.data_path)
+    # 特征维度
     args.dim_feature = [sum(dataset.train.nums_type)-n for n in dataset.train.nums_type]
-    config = tf.ConfigProto()
+    print("dataset.train.nums_type:",dataset.train.nums_type)
+    # print("dataset.train.nums_type:",dataset.train.nums_type)
+    print("args.dim_feature:",args.dim_feature)
+    # tf.ConfigProto()主要的作用是配置tf.Session的运算方式，比如gpu运算或者cpu运算
+    # tf.ConfigProto一般用在创建session的时候，用来对session进行参数配置。
+    config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
-    K.set_session(tf.Session(config=config))
+    K.set_session(tf.compat.v1.Session(config=config))
+    # 构建超图
     h = hypergraph(args)
+
     begin = time.time()
+    # 训练
     h.train(dataset)
     end = time.time()
     print("time, ", end-begin)
+    # 保存模型
     h.save()
+    # 保存embedding
     h.save_embeddings(dataset)
+    # 清除模型缓存
     K.clear_session()
