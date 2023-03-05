@@ -23,15 +23,8 @@ class DataSet(object):
         self.nums_examples = len(edge)
         self.epochs_completed = 0
         self.index_in_epoch = 0
-
     def next_batch2(self, embeddings, batch_size=16, num_neg_samples=1, pair_radio=0.9, sparse_input=True):
-
-        """
-            Return the next `batch_size` examples from this data set.
-            if num_neg_samples = 0, there is no negative sampling.
-        """
         if self.index_in_epoch < self.nums_examples:
-            # print("self.index_in_epoch:",self.index_in_epoch)
             start = self.index_in_epoch
             self.index_in_epoch += batch_size
             if self.index_in_epoch > self.nums_examples:
@@ -39,13 +32,13 @@ class DataSet(object):
                 np.random.shuffle(self.edge)
                 start = 0
                 end = batch_size
-            #     assert self.index_in_epoch <= self.nums_examples
             else:
                 end = self.index_in_epoch
+
             neg_data = []
             for i in range(start, end):
                 n_neg = 0
-                while(n_neg < num_neg_samples):
+                while (n_neg < num_neg_samples):
                     ### warning !!! we need deepcopy to copy list
                     index = copy.deepcopy(self.edge[i])
                     mode = np.random.rand()
@@ -67,7 +60,7 @@ class DataSet(object):
                 batch_data = np.vstack((self.edge[start:end], neg_data))
                 nums_batch = len(batch_data)
                 labels = np.zeros(nums_batch)
-                labels[0:end-start] = 1
+                labels[0:end - start] = 1
                 perm = np.random.permutation(nums_batch)
                 batch_data = batch_data[perm]
                 labels = labels[perm]
@@ -76,12 +69,11 @@ class DataSet(object):
                 nums_batch = len(batch_data)
                 labels = np.ones(len(batch_data))
             batch_e = embedding_lookup(embeddings, batch_data, sparse_input)
-            # print("batch_data_label:",labels)
+            # print("batch_data:",dict([('input_{}'.format(i), batch_e[i]) for i in range(3)]))
             return (dict([('input_{}'.format(i), batch_e[i]) for i in range(3)]),
-                    dict([('decode_{}'.format(i), batch_e[i]) for i in range(3)]+[('classify_layer', labels)]))
+                    dict([('decode_{}'.format(i), batch_e[i]) for i in range(3)] + [('classify_layer', labels)]))
         else:
             return None
-
     def next_batch(self, embeddings, batch_size=16, num_neg_samples=1, pair_radio=0.9, sparse_input=True):
         """
             Return the next `batch_size` examples from this data set.
@@ -131,7 +123,6 @@ class DataSet(object):
                 nums_batch = len(batch_data)
                 labels = np.ones(len(batch_data))
             batch_e = embedding_lookup(embeddings, batch_data, sparse_input)
-            # print("batch_data:",dict([('input_{}'.format(i), batch_e[i]) for i in range(3)]))
             yield (dict([('input_{}'.format(i), batch_e[i]) for i in range(3)]),
                     dict([('decode_{}'.format(i), batch_e[i]) for i in range(3)]+[('classify_layer', labels)]))
 
@@ -145,7 +136,6 @@ def read_data_sets(train_dir):
     TRAIN_FILE = 'train_data.npz'
     TEST_FILE = 'test_data.npz'
     data = np.load(os.path.join(train_dir, TRAIN_FILE))
-    print("data['nums_type']:",data['nums_type'])
     train_data = DataSet(data['train_data'], data['nums_type'])
     labels = data['labels'] if 'labels' in data else None
     idx_label = data['idx_label'] if 'idx_label' in data else None
@@ -154,27 +144,16 @@ def read_data_sets(train_dir):
     data = np.load(os.path.join(train_dir, TEST_FILE))
     test_data = DataSet(data['test_data'], data['nums_type'])
     node_cluster = data['node_cluster'] if 'node_cluster' in data else None
-    # test_labels = data['labels'] if 'labels' in data else None
+    test_labels = data['labels'] if 'labels' in data else None
     del data
     embeddings = generate_embeddings(train_data.edge, train_data.nums_type)
-    '''
-        train_data.edge: [[ 93  57   4]
-                         [ 17   7   0]
-                         [ 26  13   4]
-                         ...
-                         [108  15   1]
-                         [113   1   0]
-                         [141  41   3]]
-
-    '''
     return Datasets(train=train_data, test=test_data, embeddings=embeddings, node_cluster=node_cluster,
                 labels=labels, idx_label=idx_label, label_name=label_set)
 
 def generate_H(edge, nums_type):
     nums_examples = len(edge)
-
-    print("edge[]:",edge[:,1])
-    H = [csr_matrix((np.ones(nums_examples), (edge[:, i], range(nums_examples))), shape=(nums_type[i], nums_examples)) for i in range(3)]
+    hid_nums = int(nums_examples*0.2)
+    H = [csr_matrix((np.ones(nums_examples-hid_nums), (edge[hid_nums:, i], range(nums_examples-hid_nums))), shape=(nums_type[i], nums_examples-hid_nums)) for i in range(3)]
     return H
 
 def dense_to_onehot(labels):
@@ -183,30 +162,11 @@ def dense_to_onehot(labels):
 def generate_embeddings(edge, nums_type, H=None):
     if H is None:
         H = generate_H(edge, nums_type)
-    # print("nums_type:",nums_type)
+    print("H:",H)
     embeddings = [H[i].dot(s_vstack([H[j] for j in range(3) if j != i]).T).astype('float') for i in range(3)]
-    '''
-    
-    [<146x75 sparse matrix of type '<class 'numpy.float64'>'
-	with 1199 stored elements in Compressed Sparse Row format>, <70x151 sparse matrix of type '<class 'numpy.float64'>'
-	with 834 stored elements in Compressed Sparse Row format>, <5x216 sparse matrix of type '<class 'numpy.float64'>'
-	with 629 stored elements in Compressed Sparse Row format>]
-	
-    '''
     ### 0-1 scaling
     for i in range(3):
-        # min(1)返回该矩阵中每一行的最小值
-        # min(0)返回该矩阵中每一列的最小值
-        # todense() 返回密集表示
-        # 展平矩阵，将多维矩阵展平为一维矩阵
-        # embedding[i] 是一个三元组
-        # flatten 将多维矩阵展开成一维
         col_max = np.array(embeddings[i].max(0).todense()).flatten()
-        # print("col_max:",col_max)
-        # print("i:",i,"embedding:",embeddings[i])
-        # 用于得到数组array中非零元素的位置（数组索引）的函数
         _, col_index = embeddings[i].nonzero()
         embeddings[i].data /= col_max[col_index]
     return embeddings
-
-# read_data_sets("../data/GPS")
